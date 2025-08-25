@@ -1,0 +1,68 @@
+# Python / Django
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtualenv / Conda
+.env
+.venv
+venv/
+ENV/
+env/
+*.conda
+
+# Django stuff
+*.log
+local_settings.py
+media/
+staticfiles/
+/static/
+.db.sqlite3-journal
+
+# SQLite DB
+/db.sqlite3
+
+# Migrations cache (keep migration files themselves)
+*/migrations/__pycache__/
+
+# Byte-compiled
+*.so
+
+# Jupyter
+.ipynb_checkpoints/
+
+# VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# pytest / coverage
+.pytest_cache/
+.coverage*
+htmlcov/
+.tox/
+.mypy_cache/
+.pyre/
+
+# Build
+build/
+dist/
+*.egg-info/
+
+# Data artifacts (not source controlled)
+/arxrag/data/images/*
+/arxrag/data/pdfs/*
+/arxrag/data/index/*
+!arxrag/data/.gitkeep
+!arxrag/data/images/.gitkeep
+!arxrag/data/pdfs/.gitkeep
+!arxrag/data/index/.gitkeep
+
+# Keys / secrets
+*.key
+openai_api_key*
+
