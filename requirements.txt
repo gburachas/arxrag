@@ -1,0 +1,12 @@
+Django==5.2.5
+djangorestframework==3.15.2
+faiss-cpu==1.8.0.post1
+openai>=1.0.0
+rapidfuzz==3.9.6
+pypdf==4.2.0
+PyMuPDF==1.24.9
+arxiv==2.1.0
+numpy==1.26.4
+transformers==4.41.2
+torch>=2.2.0
+requests>=2.31.0
