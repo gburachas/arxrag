@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>arXiv Multimodal RAG</title>
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <style>
+      :root { font-family: system-ui, sans-serif; color-scheme: light dark; }
+      body { max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
+      h1 { font-size: 1.8rem; margin-bottom: .5rem; }
+      form { margin: 1rem 0; display: flex; gap: .5rem; flex-wrap: wrap; }
+      input[type=text], input[name=query], input[name=question] { flex: 1 1 420px; padding: .55rem .7rem; border: 1px solid #8884; border-radius: 6px; }
+      button { padding: .55rem .9rem; border: 1px solid #4446; border-radius: 6px; background: linear-gradient(#4b6,#264); color: #fff; cursor: pointer; font-weight: 600; }
+      button:hover { filter: brightness(1.05); }
+      #answer-card { margin-top: 1.2rem; border: 1px solid #8884; border-radius: 8px; padding: 1rem 1.1rem; background: #f9fafb0d; position: relative; }
+      #answer-card.loading::after { content: 'Thinking...'; position: absolute; top: .6rem; right: .8rem; font-size: .75rem; letter-spacing: .05em; opacity: .7; }
+      .meta { font-size: .75rem; text-transform: uppercase; letter-spacing: .08em; color: #666; margin-bottom: .4rem; }
+      pre { white-space: pre-wrap; word-wrap: break-word; font-family: ui-monospace, monospace; }
+      details { margin-top: .75rem; border: 1px solid #ccc4; border-radius: 6px; padding: .4rem .75rem; background: #fff2; }
+      details[open] { background: #fff4; }
+      summary { cursor: pointer; font-weight: 600; }
+      .ctx-item { margin: .5rem 0; padding-bottom:.5rem; border-bottom: 1px dashed #9993; }
+      .ctx-item:last-child { border-bottom: none; }
+      .badge { display:inline-block; background:#345; color:#fff; font-size:.65rem; padding:2px 6px; border-radius: 10px; margin-right:.4rem; }
+      .small { font-size:.75rem; opacity:.8; }
+      .faded { opacity:.65; }
+      .row { display:flex; gap:.5rem; align-items:center; }
+      .grow { flex:1; }
+      .inline-note { font-size:.7rem; opacity:.7; margin-left:.5rem; }
+      .error { color:#b00; font-weight:600; }
+    </style>
+  </head>
+  <body>
+    <h1>arXiv Multimodal RAG</h1>
+    <div class="meta">Ingest papers → ask grounded questions. Sentences, not dumps.</div>
+
+    <!-- Ingest Form -->
+    <form hx-post="/api/agent/search_ingest" hx-trigger="submit" hx-target="#status" hx-swap="innerHTML">
+      <input type="text" name="query" placeholder="arxiv query (e.g., agentic RAG)" />
+      <button>Fetch & Index</button>
+    </form>
+    <div id="status" class="small faded"></div>
+
+    <!-- Ask Form -->
+  <form id="ask-form" hx-post="/api/ask" hx-trigger="submit" hx-target="#answer-wrapper" hx-swap="none" hx-include="[name=multimodal]">
+      <input type="text" name="question" placeholder="Ask about your papers" />
+      <label class="row small" style="gap:.25rem;">
+        <input type="checkbox" name="multimodal" checked /> multimodal
+      </label>
+      <button>Ask</button>
+    </form>
+
+    <div id="answer-wrapper"></div>
+
+    <template id="answer-template">
+      <div id="answer-card" class="loading">
+        <div class="meta">Answer</div>
+        <pre class="answer-text"></pre>
+        <details>
+          <summary>Retrieved context (chunks)</summary>
+          <div class="contexts"></div>
+        </details>
+      </div>
+    </template>
+
+    <script>
+      // Intercept form submit to show skeleton immediately
+      document.getElementById('ask-form').addEventListener('submit', function() {
+        const wrap = document.getElementById('answer-wrapper');
+        wrap.innerHTML = document.getElementById('answer-template').innerHTML;
+      });
+
+      // Prevent htmx from swapping JSON into the target; keep skeleton
+      document.body.addEventListener('htmx:beforeSwap', function(evt){
+        if(evt.detail.elt.id === 'answer-wrapper'){
+          const ct = evt.detail.xhr.getResponseHeader('Content-Type') || '';
+          if(ct.includes('application/json') || evt.detail.xhr.responseText.trim().startsWith('{')){
+            // Render JSON manually then cancel swap
+            try {
+              const data = JSON.parse(evt.detail.xhr.responseText);
+              renderAnswerData(data);
+            } catch(e) {
+              const wrap = document.getElementById('answer-wrapper');
+              wrap.innerHTML = `<div class='error'>Parse error: ${e.message}</div>`;
+            }
+            evt.detail.shouldSwap = false; // keep existing skeleton
+          }
+        }
+      });
+
+      // Listen for htmx afterOnLoad to format JSON response into card
+      document.body.addEventListener('htmx:afterOnLoad', function(evt) {
+  if (evt.detail.elt.id === 'answer-wrapper') {
+          try {
+            const data = JSON.parse(evt.detail.xhr.responseText);
+            const card = document.getElementById('answer-card');
+            if (!card) return;
+            card.classList.remove('loading');
+            card.querySelector('.answer-text').textContent = data.answer || '(no answer)';
+            const ctxHost = card.querySelector('.contexts');
+            ctxHost.innerHTML = '';
+            const meta = data.meta || {};
+            const sources = meta.sources || [];
+            const snippets = meta.snippets || [];
+            const usage = meta.usage || {};
+            const latency = meta.latency_s != null ? meta.latency_s + 's' : 'n/a';
+            const model = meta.model || '';
+            const ctxTokenCounts = meta.context_token_counts || [];
+            // Summary stats block
+            const stats = document.createElement('div');
+            stats.className = 'small faded';
+            stats.textContent = `model=${model} latency=${latency}` + (usage.total_tokens ? ` tokens(p/c/t)=${usage.prompt_tokens||'?'} / ${usage.completion_tokens||'?'} / ${usage.total_tokens}` : '');
+            ctxHost.appendChild(stats);
+            // Snippets list
+            if (snippets.length) {
+              const sn = document.createElement('div');
+              sn.className = 'small';
+              sn.style.marginTop = '.5rem';
+              sn.innerHTML = '<strong>Snippets used:</strong><br>' + snippets.map(s=>s.replace(/[<>]/g,'')).join('<br>');
+              ctxHost.appendChild(sn);
+            }
+            // Sources table-ish
+            if (sources.length) {
+              const srcBlock = document.createElement('div');
+              srcBlock.style.marginTop = '.75rem';
+              srcBlock.innerHTML = '<strong>Sources:</strong>';
+              sources.forEach(s => {
+                const line = document.createElement('div');
+                line.className = 'ctx-item';
+                line.innerHTML = `<span class="badge">[${s.index}]</span> <span class='small'><strong>${(s.paper||'').replace(/[<>]/g,'')}</strong> (arXiv:${s.arxiv_id}) kind=${s.kind} unit=${s.page}</span>`;
+                srcBlock.appendChild(line);
+              });
+              ctxHost.appendChild(srcBlock);
+            }
+            // Raw retrieved chunks (truncated)
+            const rawHeader = document.createElement('div');
+            rawHeader.style.marginTop = '.75rem';
+            rawHeader.innerHTML = '<strong>Raw retrieved chunks (truncated):</strong>';
+            ctxHost.appendChild(rawHeader);
+            (data.contexts || []).forEach((c, i) => {
+              const div = document.createElement('div');
+              div.className = 'ctx-item';
+              const kind = c.kind;
+              const ord = c.ord;
+              let content = (c.content || '').trim();
+              if (content.length > 320) content = content.slice(0, 320) + '…';
+              const tokensInfo = ctxTokenCounts[i] != null ? ` tokens=${ctxTokenCounts[i]}` : '';
+              div.innerHTML = `<div><span class=\"badge\">#${i}</span><strong>${kind}</strong> <span class=\"small\">ord=${ord}${tokensInfo}</span></div>` +
+                              (kind === 'image' && c.image_path ? `<div class='small faded'>image: ${c.image_path}</div>` : '') +
+                              `<div class='small'>${content ? content.replace(/[<>]/g,'') : '<em>(empty)</em>'}</div>`;
+              ctxHost.appendChild(div);
+            });
+          } catch (e) {
+            const wrap = document.getElementById('answer-wrapper');
+            wrap.innerHTML = `<div class='error'>Parse error: ${e.message}</div>`;
+          }
+        } else if (evt.detail.elt.id === 'status') {
+          // ingestion response is JSON; show a terse confirmation
+          try {
+            const data = JSON.parse(evt.detail.xhr.responseText);
+            evt.detail.elt.textContent = 'Ingestion started / done (check logs).';
+          } catch { /* ignore */ }
+        }
+      });
+        function renderAnswerData(data){
+          const card = document.getElementById('answer-card');
+          if(!card) return;
+          card.classList.remove('loading');
+          card.querySelector('.answer-text').textContent = data.answer || '(no answer)';
+          const ctxHost = card.querySelector('.contexts');
+          ctxHost.innerHTML='';
+          const meta = data.meta || {};
+          const sources = meta.sources || [];
+          const snippets = meta.snippets || [];
+          const usage = meta.usage || {};
+          const latency = meta.latency_s != null ? meta.latency_s + 's' : 'n/a';
+          const model = meta.model || '';
+          const ctxTokenCounts = meta.context_token_counts || [];
+          const stats = document.createElement('div');
+          stats.className='small faded';
+          stats.textContent = `model=${model} latency=${latency}` + (usage.total_tokens ? ` tokens(p/c/t)=${usage.prompt_tokens||'?'} / ${usage.completion_tokens||'?'} / ${usage.total_tokens}` : '');
+          ctxHost.appendChild(stats);
+          if (snippets.length){
+            const sn=document.createElement('div');
+            sn.className='small'; sn.style.marginTop='.5rem';
+            sn.innerHTML='<strong>Snippets used:</strong><br>'+snippets.map(s=>s.replace(/[<>]/g,'')).join('<br>');
+            ctxHost.appendChild(sn);
+          }
+          if (sources.length){
+            const srcBlock=document.createElement('div'); srcBlock.style.marginTop='.75rem'; srcBlock.innerHTML='<strong>Sources:</strong>';
+              sources.forEach(s=>{ const line=document.createElement('div'); line.className='ctx-item'; line.innerHTML=`<span class="badge">[${s.index}]</span> <span class='small'><strong>${(s.paper||'').replace(/[<>]/g,'')}</strong> (arXiv:${s.arxiv_id}) kind=${s.kind} unit=${s.page}</span>`; srcBlock.appendChild(line); });
+            ctxHost.appendChild(srcBlock);
+          }
+          const rawHeader=document.createElement('div'); rawHeader.style.marginTop='.75rem'; rawHeader.innerHTML='<strong>Raw retrieved chunks (truncated):</strong>';
+          ctxHost.appendChild(rawHeader);
+          (data.contexts||[]).forEach((c,i)=>{ const div=document.createElement('div'); div.className='ctx-item'; const kind=c.kind; const ord=c.ord; let content=(c.content||'').trim(); if(content.length>320) content=content.slice(0,320)+'…'; const tokensInfo=ctxTokenCounts[i]!=null?` tokens=${ctxTokenCounts[i]}`:''; div.innerHTML=`<div><span class=\"badge\">#${i}</span><strong>${kind}</strong> <span class=\"small\">ord=${ord}${tokensInfo}</span></div>`+(kind==='image'&&c.image_path?`<div class='small faded'>image: ${c.image_path}</div>`:'')+`<div class='small'>${content?content.replace(/[<>]/g,''):'<em>(empty)</em>'}</div>`; ctxHost.appendChild(div); });
+        }
+
+        document.body.addEventListener('htmx:afterOnLoad', function(evt){
+          if(evt.detail.elt.id==='status'){
+            try { JSON.parse(evt.detail.xhr.responseText); evt.detail.elt.textContent='Ingestion started / done (check logs).'; } catch {}
+          }
+        });
+    </script>
+  </body>
+</html>
