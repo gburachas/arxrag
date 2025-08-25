@@ -109,7 +109,8 @@
             // Summary stats block
             const stats = document.createElement('div');
             stats.className = 'small faded';
-            stats.textContent = `model=${model} latency=${latency}` + (usage.total_tokens ? ` tokens(p/c/t)=${usage.prompt_tokens||'?'} / ${usage.completion_tokens||'?'} / ${usage.total_tokens}` : '');
+      const dedup = (meta.dedup ? ` dedup=${meta.dedup.original}->${meta.dedup.after_dedup}` : '');
+      stats.textContent = `model=${model} latency=${latency}${dedup}` + (usage.total_tokens ? ` tokens(p/c/t)=${usage.prompt_tokens||'?'} / ${usage.completion_tokens||'?'} / ${usage.total_tokens}` : '');
             ctxHost.appendChild(stats);
             // Snippets list
             if (snippets.length) {

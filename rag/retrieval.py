@@ -47,7 +47,24 @@ def answer1(q, k=5):
 
 def answer(q, k=5):
     print("answer called with:", q, k)
-    ctxs = search(q, k)
+    original_ctxs = search(q, k)
+    # --- Redundancy suppression: collapse near-identical chunks (exact hash match) ---
+    import hashlib
+    seen_hash = {}
+    dedup_ctxs = []
+    old_to_new = {}
+    for idx, c in enumerate(original_ctxs):
+        text = (c.content or "")
+        h = hashlib.sha1(text.encode('utf-8')).hexdigest()
+        if h in seen_hash:
+            # duplicate: map to existing canonical index
+            old_to_new[idx] = seen_hash[h]
+            continue
+        new_index = len(dedup_ctxs)
+        seen_hash[h] = new_index
+        old_to_new[idx] = new_index
+        dedup_ctxs.append(c)
+    ctxs = dedup_ctxs
     print("search returned count:", len(ctxs))
 
     def is_numeric_heavy(text: str) -> bool:
@@ -62,7 +79,7 @@ def answer(q, k=5):
     # Score chunks by simple keyword overlap (lowercase unique words from question)
     q_words = {w for w in q.lower().split() if len(w) > 2}
     scored = []
-    for i, c in enumerate(ctxs):
+    for old_i, c in enumerate(ctxs):
         if c.kind != "text":
             continue
         txt = c.content.strip()
@@ -79,7 +96,8 @@ def answer(q, k=5):
                 continue  # give up if all numeric heavy
         words = [w.strip('.,();:') for w in txt.lower().split()]
         overlap = len(q_words.intersection(words))
-        scored.append((overlap, i, c, txt))
+    # use current (deduped) index
+    scored.append((overlap, old_i, c, txt))
 
     # sort by score desc, then index
     scored.sort(key=lambda x: (-x[0], x[1]))
@@ -112,6 +130,16 @@ def answer(q, k=5):
 
     # sort sentences by score desc then chunk index
     sentence_records.sort(key=lambda x: (-x[0], x[1]))
+    # Remove duplicate sentences (same lowercase text) keeping first (highest score) occurrence
+    seen_sent = set()
+    uniq_sentence_records = []
+    for rec in sentence_records:
+        key = rec[2].lower()
+        if key in seen_sent:
+            continue
+        seen_sent.add(key)
+        uniq_sentence_records.append(rec)
+    sentence_records = uniq_sentence_records
 
     # Build concise snippet list with word budget
     total_word_budget = 800
@@ -226,5 +254,6 @@ def answer(q, k=5):
         'usage': usage,
         'latency_s': round(latency_s, 3),
         'context_token_counts': context_token_counts,
+        'dedup': {'original': len(original_ctxs), 'after_dedup': len(ctxs)}
     }
     return {'answer': ans, 'meta': meta}, truncated_ctxs
