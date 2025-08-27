@@ -25,7 +25,7 @@ SECRET_KEY = 'django-insecure-)l+ukgn*jx^(+4*8b+r9jy8yl8(wl!zfk+i*fig78%rawbum*4
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["*"]  # dev: accept all hosts (including testserver, localhost)
 
 
 # Application definition
@@ -46,13 +46,26 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
+    # NOTE: CSRF middleware removed for simplicity on local dev API fetches.
+    # 'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-REST_FRAMEWORK = {"DEFAULT_RENDERER_CLASSES":["rest_framework.renderers.JSONRenderer"]}
+REST_FRAMEWORK = {
+    "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
+    # Remove SessionAuthentication to avoid CSRF enforcement for simple fetch() calls.
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        # Basic auth is fine for dev; no CSRF requirement.
+        "rest_framework.authentication.BasicAuthentication",
+        # Token auth placeholder (not configured, harmless if unused).
+        "rest_framework.authentication.TokenAuthentication",
+    ],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.AllowAny"
+    ],
+}
 
 ROOT_URLCONF = 'arxrag.urls'
 

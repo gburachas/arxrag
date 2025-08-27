@@ -6,7 +6,7 @@
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
     <style>
       :root { font-family: system-ui, sans-serif; color-scheme: light dark; }
-      body { max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
+  body { max-width: 1400px; margin: 1.2rem auto; padding: 0 1.2rem; }
       h1 { font-size: 1.8rem; margin-bottom: .5rem; }
       form { margin: 1rem 0; display: flex; gap: .5rem; flex-wrap: wrap; }
       input[type=text], input[name=query], input[name=question] { flex: 1 1 420px; padding: .55rem .7rem; border: 1px solid #8884; border-radius: 6px; }
@@ -28,180 +28,238 @@
       .grow { flex:1; }
       .inline-note { font-size:.7rem; opacity:.7; margin-left:.5rem; }
       .error { color:#b00; font-weight:600; }
+      /* --- Added chat layout + panel + bubble styling --- */
+      #layout { display:flex; align-items:stretch; }
+      #left-panel, #right-panel { background:#fafafa08; border:1px solid #8883; border-radius:8px; padding:.75rem .85rem; width:250px; box-sizing:border-box; height:calc(100vh - 170px); overflow:auto; backdrop-filter:blur(4px); transition: transform .3s ease; }
+      #left-panel { margin-right:1rem; }
+      #right-panel { margin-left:1rem; }
+      #left-panel:not(.open) { transform: translateX(-280px); }
+      #right-panel:not(.open) { transform: translateX(300px); }
+      #chat-area { flex:1; display:flex; flex-direction:column; height:calc(100vh - 170px); }
+      #chat-log { flex:1; overflow-y:auto; border:1px solid #8884; border-radius:10px; padding:.75rem .9rem; background:#fff1; }
+      .msg { margin:.55rem 0; }
+      .bubble { border:1px solid #5554; border-radius:10px; padding:.55rem .75rem; line-height:1.35; background:#1e27300f; position:relative; }
+      .bubble.user { background:#345b; color:#fff; }
+      .bubble.ai { background:#26303818; }
+      .bubble.loading { opacity:.7; font-style:italic; }
+      .stream-text { white-space:pre-wrap; }
+      .ref-item { margin:.4rem 0; padding-bottom:.4rem; border-bottom:1px dashed #9993; }
+      .ref-item:last-child { border-bottom:none; }
+      #tools-list label { display:block; border:1px solid #6663; padding:.4rem .45rem; border-radius:6px; background:#fff1; margin:.35rem 0; }
+      #tools-list input { margin-right:.4rem; }
+      #clear-chat { background:#633; }
+      @media (max-width: 1200px) {
+        #left-panel.open, #right-panel.open { position:fixed; top:70px; z-index:40; background:#000b; backdrop-filter:blur(10px); }
+        #left-panel { left:10px; }
+        #right-panel { right:10px; }
+        #chat-area { height:calc(100vh - 200px); }
+      }
     </style>
   </head>
   <body>
-    <h1>arXiv Multimodal RAG</h1>
-    <div class="meta">Ingest papers → ask grounded questions. Sentences, not dumps.</div>
+    <header style="display:flex; align-items:center; gap:1rem;">
+      <h1 style="flex:1;">arXiv Agentic RAG</h1>
+  <button id="toggle-left" class="small" style="background:#345;">☰ Data & Tools</button>
+  <button id="toggle-right" class="small" style="background:#345;">References ▶</button>
+  <button id="clear-chat" class="small" type="button">Clear</button>
+    </header>
+    <div class="meta">Grounded multi-turn chat over your ingested papers.</div>
+    {% if index_mismatch %}
+    <div style="background:#b33; color:#fff; padding:.5rem .75rem; border-radius:6px; font-size:.7rem; margin:.5rem 0;">
+      <strong>Index Mismatch:</strong> FAISS {{ index_actual }} vs DB {{ index_expected }}. Run: <code>python manage.py rebuild_faiss</code>
+    </div>
+    {% endif %}
 
-    <!-- Ingest Form -->
-    <form hx-post="/api/agent/search_ingest" hx-trigger="submit" hx-target="#status" hx-swap="innerHTML">
-      <input type="text" name="query" placeholder="arxiv query (e.g., agentic RAG)" />
-      <button>Fetch & Index</button>
-    </form>
-    <div id="status" class="small faded"></div>
+    <div id="layout">
+      <!-- Left sliding panel -->
+  <aside id="left-panel" class="open">
+        <h3 style="margin-top:0;">Ingest</h3>
+        <form id="ingest-form" hx-post="/api/agent/search_ingest" hx-trigger="submit" hx-target="#ingest-status" hx-swap="innerHTML">
+          <input type="text" name="query" placeholder="arxiv query (e.g., agentic RAG)" />
+          <button style="margin-top:.4rem; width:100%;">Fetch & Index</button>
+        </form>
+        <div id="ingest-status" class="small faded" style="min-height:1.2rem;"></div>
+        <h3 style="margin-top:1rem;">Tools</h3>
+        <div id="tools-list" class="small faded">loading…</div>
+      </aside>
 
-    <!-- Ask Form -->
-  <form id="ask-form" hx-post="/api/ask" hx-trigger="submit" hx-target="#answer-wrapper" hx-swap="none" hx-include="[name=multimodal]">
-      <input type="text" name="question" placeholder="Ask about your papers" />
-      <label class="row small" style="gap:.25rem;">
-        <input type="checkbox" name="multimodal" checked /> multimodal
-      </label>
-      <button>Ask</button>
-    </form>
+      <!-- Center chat area -->
+      <main id="chat-area">
+        <div id="chat-log"></div>
+  <form id="ask-form" style="margin-top:1rem; display:flex; gap:.5rem;">
+          <input type="text" name="question" id="question-input" placeholder="Ask a question about your corpus" autocomplete="off" />
+          <label class="row small" style="gap:.25rem;">
+            <input type="checkbox" name="multimodal" checked /> multimodal
+          </label>
+          <label class="row small" style="gap:.25rem;">
+            <input type="checkbox" name="agentic" id="agentic-toggle" /> agentic
+          </label>
+          <button>Send</button>
+        </form>
+      </main>
 
-    <div id="answer-wrapper"></div>
+      <!-- Right references panel -->
+  <aside id="right-panel" class="open">
+        <h3 style="margin-top:0;">References</h3>
+        <div id="refs-empty" class="small faded">No answer yet.</div>
+        <div id="refs-list"></div>
+      </aside>
+  </div>
+  <!-- dummy target (was used by htmx; kept only if legacy scripts reference it) -->
+  <div id="_ignore" style="display:none"></div>
 
-    <template id="answer-template">
-      <div id="answer-card" class="loading">
-        <div class="meta">Answer</div>
-        <pre class="answer-text"></pre>
-        <details>
-          <summary>Retrieved context (chunks)</summary>
-          <div class="contexts"></div>
-        </details>
-      </div>
+    <!-- Hidden answer skeleton reused for agentic streaming context view -->
+    <template id="ctx-template">
+      <details open>
+        <summary style="cursor:pointer;">Retrieved context</summary>
+        <div class="contexts"></div>
+      </details>
     </template>
 
     <script>
-      // Intercept form submit to show skeleton immediately
-      document.getElementById('ask-form').addEventListener('submit', function() {
-        const wrap = document.getElementById('answer-wrapper');
-        wrap.innerHTML = document.getElementById('answer-template').innerHTML;
+      // Layout / panel toggle logic
+      const leftPanel = document.getElementById('left-panel');
+      const rightPanel = document.getElementById('right-panel');
+  document.getElementById('toggle-left').onclick = () => leftPanel.classList.toggle('open');
+  document.getElementById('toggle-right').onclick = () => rightPanel.classList.toggle('open');
+  document.getElementById('clear-chat').onclick = () => { chatLog.innerHTML=''; saveChat(); };
+
+      // Load tools metadata
+      async function loadTools(){
+        try{
+          const r = await fetch('/api/agent/tools');
+            const data = await r.json();
+            const host = document.getElementById('tools-list');
+            host.classList.remove('faded');
+            host.innerHTML = data.tools.map(t => `
+              <label style='display:block; margin:.25rem 0;'>
+                <input type='checkbox' data-tool='${t.name}' checked />
+                <strong>${t.name}</strong><br>
+                <span class='small'>${t.description}</span>
+              </label>`).join('');
+        }catch(e){
+          document.getElementById('tools-list').textContent = 'Error: '+e.message;
+        }
+      }
+      loadTools();
+
+      const chatLog = document.getElementById('chat-log');
+      function appendMessage(kind, html){
+        const div = document.createElement('div');
+        div.className = 'msg msg-' + kind;
+        div.innerHTML = html;
+        chatLog.appendChild(div);
+        chatLog.scrollTop = chatLog.scrollHeight;
+        saveChat();
+      }
+
+      function saveChat(){
+        try {
+          const payload = Array.from(chatLog.children).map(c=>({cls:c.className, html:c.innerHTML}));
+          localStorage.setItem('rag_chat_history', JSON.stringify(payload));
+        } catch {}
+      }
+      function restoreChat(){
+        try { const raw = localStorage.getItem('rag_chat_history'); if(!raw) return; const arr = JSON.parse(raw); arr.forEach(m=>{ const d=document.createElement('div'); d.className=m.cls; d.innerHTML=m.html; chatLog.appendChild(d); }); chatLog.scrollTop=chatLog.scrollHeight; } catch {}
+      }
+      restoreChat();
+
+      const askForm = document.getElementById('ask-form');
+      askForm.addEventListener('submit', function(ev){
+        ev.preventDefault();
+        const qInput = document.getElementById('question-input');
+        const question = qInput.value.trim();
+        if(!question) return;
+        const agentic = document.getElementById('agentic-toggle').checked;
+        appendMessage('user', `<div class='bubble user'><strong>You:</strong> ${question.replace(/</g,'&lt;')}</div>`);
+        qInput.value='';
+        if(agentic){ runAgenticChat(question); } else { runPlainChat(question); }
       });
 
-      // Prevent htmx from swapping JSON into the target; keep skeleton
-      document.body.addEventListener('htmx:beforeSwap', function(evt){
-        if(evt.detail.elt.id === 'answer-wrapper'){
-          const ct = evt.detail.xhr.getResponseHeader('Content-Type') || '';
-          if(ct.includes('application/json') || evt.detail.xhr.responseText.trim().startsWith('{')){
-            // Render JSON manually then cancel swap
-            try {
-              const data = JSON.parse(evt.detail.xhr.responseText);
-              renderAnswerData(data);
-            } catch(e) {
-              const wrap = document.getElementById('answer-wrapper');
-              wrap.innerHTML = `<div class='error'>Parse error: ${e.message}</div>`;
-            }
-            evt.detail.shouldSwap = false; // keep existing skeleton
-          }
+    async function runPlainChat(question){
+        const pendingId = 'pending-'+Math.random().toString(36).slice(2);
+        appendMessage('assistant', `<div id='${pendingId}' class='bubble ai loading'>Thinking…</div>`);
+        try{
+          const r = await fetch('/api/ask', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({question, multimodal:true, k:5})});
+          const data = await r.json();
+          renderAnswerIntoBubble(pendingId, data);
+      saveChat();
+        }catch(e){
+          document.getElementById(pendingId).textContent = 'Error: '+e.message;
         }
-      });
+      }
 
-      // Listen for htmx afterOnLoad to format JSON response into card
-      document.body.addEventListener('htmx:afterOnLoad', function(evt) {
-  if (evt.detail.elt.id === 'answer-wrapper') {
-          try {
-            const data = JSON.parse(evt.detail.xhr.responseText);
-            const card = document.getElementById('answer-card');
-            if (!card) return;
-            card.classList.remove('loading');
-            card.querySelector('.answer-text').textContent = data.answer || '(no answer)';
-            const ctxHost = card.querySelector('.contexts');
-            ctxHost.innerHTML = '';
-            const meta = data.meta || {};
-            const sources = meta.sources || [];
-            const snippets = meta.snippets || [];
-            const usage = meta.usage || {};
-            const latency = meta.latency_s != null ? meta.latency_s + 's' : 'n/a';
-            const model = meta.model || '';
-            const ctxTokenCounts = meta.context_token_counts || [];
-            // Summary stats block
-            const stats = document.createElement('div');
-            stats.className = 'small faded';
-      const dedup = (meta.dedup ? ` dedup=${meta.dedup.original}->${meta.dedup.after_dedup}` : '');
-      stats.textContent = `model=${model} latency=${latency}${dedup}` + (usage.total_tokens ? ` tokens(p/c/t)=${usage.prompt_tokens||'?'} / ${usage.completion_tokens||'?'} / ${usage.total_tokens}` : '');
-            ctxHost.appendChild(stats);
-            // Snippets list
-            if (snippets.length) {
-              const sn = document.createElement('div');
-              sn.className = 'small';
-              sn.style.marginTop = '.5rem';
-              sn.innerHTML = '<strong>Snippets used:</strong><br>' + snippets.map(s=>s.replace(/[<>]/g,'')).join('<br>');
-              ctxHost.appendChild(sn);
-            }
-            // Sources table-ish
-            if (sources.length) {
-              const srcBlock = document.createElement('div');
-              srcBlock.style.marginTop = '.75rem';
-              srcBlock.innerHTML = '<strong>Sources:</strong>';
-              sources.forEach(s => {
-                const line = document.createElement('div');
-                line.className = 'ctx-item';
-                line.innerHTML = `<span class="badge">[${s.index}]</span> <span class='small'><strong>${(s.paper||'').replace(/[<>]/g,'')}</strong> (arXiv:${s.arxiv_id}) kind=${s.kind} unit=${s.page}</span>`;
-                srcBlock.appendChild(line);
-              });
-              ctxHost.appendChild(srcBlock);
-            }
-            // Raw retrieved chunks (truncated)
-            const rawHeader = document.createElement('div');
-            rawHeader.style.marginTop = '.75rem';
-            rawHeader.innerHTML = '<strong>Raw retrieved chunks (truncated):</strong>';
-            ctxHost.appendChild(rawHeader);
-            (data.contexts || []).forEach((c, i) => {
-              const div = document.createElement('div');
-              div.className = 'ctx-item';
-              const kind = c.kind;
-              const ord = c.ord;
-              let content = (c.content || '').trim();
-              if (content.length > 320) content = content.slice(0, 320) + '…';
-              const tokensInfo = ctxTokenCounts[i] != null ? ` tokens=${ctxTokenCounts[i]}` : '';
-              div.innerHTML = `<div><span class=\"badge\">#${i}</span><strong>${kind}</strong> <span class=\"small\">ord=${ord}${tokensInfo}</span></div>` +
-                              (kind === 'image' && c.image_path ? `<div class='small faded'>image: ${c.image_path}</div>` : '') +
-                              `<div class='small'>${content ? content.replace(/[<>]/g,'') : '<em>(empty)</em>'}</div>`;
-              ctxHost.appendChild(div);
-            });
-          } catch (e) {
-            const wrap = document.getElementById('answer-wrapper');
-            wrap.innerHTML = `<div class='error'>Parse error: ${e.message}</div>`;
-          }
-        } else if (evt.detail.elt.id === 'status') {
-          // ingestion response is JSON; show a terse confirmation
-          try {
-            const data = JSON.parse(evt.detail.xhr.responseText);
-            evt.detail.elt.textContent = 'Ingestion started / done (check logs).';
-          } catch { /* ignore */ }
-        }
-      });
-        function renderAnswerData(data){
-          const card = document.getElementById('answer-card');
-          if(!card) return;
-          card.classList.remove('loading');
-          card.querySelector('.answer-text').textContent = data.answer || '(no answer)';
-          const ctxHost = card.querySelector('.contexts');
-          ctxHost.innerHTML='';
-          const meta = data.meta || {};
-          const sources = meta.sources || [];
-          const snippets = meta.snippets || [];
-          const usage = meta.usage || {};
-          const latency = meta.latency_s != null ? meta.latency_s + 's' : 'n/a';
-          const model = meta.model || '';
-          const ctxTokenCounts = meta.context_token_counts || [];
-          const stats = document.createElement('div');
-          stats.className='small faded';
-          stats.textContent = `model=${model} latency=${latency}` + (usage.total_tokens ? ` tokens(p/c/t)=${usage.prompt_tokens||'?'} / ${usage.completion_tokens||'?'} / ${usage.total_tokens}` : '');
-          ctxHost.appendChild(stats);
-          if (snippets.length){
-            const sn=document.createElement('div');
-            sn.className='small'; sn.style.marginTop='.5rem';
-            sn.innerHTML='<strong>Snippets used:</strong><br>'+snippets.map(s=>s.replace(/[<>]/g,'')).join('<br>');
-            ctxHost.appendChild(sn);
-          }
-          if (sources.length){
-            const srcBlock=document.createElement('div'); srcBlock.style.marginTop='.75rem'; srcBlock.innerHTML='<strong>Sources:</strong>';
-              sources.forEach(s=>{ const line=document.createElement('div'); line.className='ctx-item'; line.innerHTML=`<span class="badge">[${s.index}]</span> <span class='small'><strong>${(s.paper||'').replace(/[<>]/g,'')}</strong> (arXiv:${s.arxiv_id}) kind=${s.kind} unit=${s.page}</span>`; srcBlock.appendChild(line); });
-            ctxHost.appendChild(srcBlock);
-          }
-          const rawHeader=document.createElement('div'); rawHeader.style.marginTop='.75rem'; rawHeader.innerHTML='<strong>Raw retrieved chunks (truncated):</strong>';
-          ctxHost.appendChild(rawHeader);
-          (data.contexts||[]).forEach((c,i)=>{ const div=document.createElement('div'); div.className='ctx-item'; const kind=c.kind; const ord=c.ord; let content=(c.content||'').trim(); if(content.length>320) content=content.slice(0,320)+'…'; const tokensInfo=ctxTokenCounts[i]!=null?` tokens=${ctxTokenCounts[i]}`:''; div.innerHTML=`<div><span class=\"badge\">#${i}</span><strong>${kind}</strong> <span class=\"small\">ord=${ord}${tokensInfo}</span></div>`+(kind==='image'&&c.image_path?`<div class='small faded'>image: ${c.image_path}</div>`:'')+`<div class='small'>${content?content.replace(/[<>]/g,''):'<em>(empty)</em>'}</div>`; ctxHost.appendChild(div); });
-        }
-
-        document.body.addEventListener('htmx:afterOnLoad', function(evt){
-          if(evt.detail.elt.id==='status'){
-            try { JSON.parse(evt.detail.xhr.responseText); evt.detail.elt.textContent='Ingestion started / done (check logs).'; } catch {}
-          }
+      function renderAnswerIntoBubble(id, data){
+        const el = document.getElementById(id);
+        if(!el) return;
+        let answer = (data.answer || '').trim();
+        if(!answer) answer = '(no answer – model returned empty output)';
+        answer = answer.replace(/</g,'&lt;');
+        el.innerHTML = `<div><strong>Assistant:</strong> ${answer}</div>`;
+        // update references panel
+        const refs = data.meta?.sources || [];
+        const refsList = document.getElementById('refs-list');
+        refsList.innerHTML = '';
+        document.getElementById('refs-empty').style.display = refs.length? 'none':'block';
+        refs.forEach(s => {
+          const d = document.createElement('div');
+          d.className='ref-item';
+          d.innerHTML = `<span class='badge'>[${s.index}]</span> <strong>${(s.paper||'').slice(0,140).replace(/</g,'&lt;')}</strong><br><span class='small'>${s.arxiv_id} · ${s.kind} · unit ${s.page}</span>`;
+          refsList.appendChild(d);
         });
+        // attach collapsible retrieved context if first time for this bubble
+  if(data.contexts){
+          const ctxWrap = document.createElement('div');
+          ctxWrap.className='ctx-wrapper';
+          const tmpl = document.getElementById('ctx-template').content.cloneNode(true);
+          const host = tmpl.querySelector('.contexts');
+          data.contexts.forEach((c,i)=>{
+            let content=(c.content||'').trim();
+            if(content.length>320) content=content.slice(0,320)+'…';
+            const div=document.createElement('div');
+            div.className='ctx-item';
+            div.innerHTML = `<span class='badge'>#${i}</span> <span class='small'><strong>${c.kind}</strong> ord=${c.ord}</span><div class='small'>${content.replace(/</g,'&lt;')}</div>`;
+            host.appendChild(div);
+          });
+          ctxWrap.appendChild(tmpl);
+          el.appendChild(ctxWrap);
+        }
+        saveChat();
+      }
+
+      async function runAgenticChat(question){
+        const bubbleId = 'agentic-'+Math.random().toString(36).slice(2);
+        appendMessage('assistant', `<div id='${bubbleId}' class='bubble ai'><div class='streaming'><strong>Assistant:</strong> <span class='stream-text'></span></div><div class='small faded' id='${bubbleId}-status'>planning…</div></div>`);
+        try {
+          const allowedTools = Array.from(document.querySelectorAll('#tools-list input[type=checkbox]:checked')).map(cb=>cb.getAttribute('data-tool'));
+          const resp = await fetch('/api/agent/agentic_ask', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({question, allowed_tools: allowedTools})});
+          const reader = resp.body.getReader();
+          const dec = new TextDecoder();
+          let buffer='';
+          let finalMeta=null;
+          const textEl = document.querySelector('#'+bubbleId+' .stream-text');
+          const statusEl = document.getElementById(bubbleId+'-status');
+          function handle(part){
+            const lines = part.split('\n'); let ev=null; let dataLine='';
+            for(const l of lines){ if(l.startsWith('event:')) ev=l.slice(6).trim(); else if(l.startsWith('data:')) dataLine += l.slice(5).trim(); }
+            if(!ev||!dataLine) return;
+            try{ var payload = JSON.parse(dataLine); }catch{return;}
+            if(ev==='plan'){ statusEl.textContent = 'plan: '+payload.plan.map(p=>p.name).join(' → '); }
+            else if(ev==='action'){ statusEl.textContent = 'action '+payload.tool; }
+            else if(ev==='token'){ textEl.textContent = payload.text; }
+            else if(ev==='done'){ finalMeta = payload.meta||null; statusEl.textContent = 'done'; updateRefs(finalMeta); saveChat(); }
+          }
+          while(true){ const {value, done} = await reader.read(); if(done) break; buffer += dec.decode(value,{stream:true}); const parts = buffer.split(/\n\n/); buffer = parts.pop(); for(const p of parts){ if(p.trim()) handle(p); } }
+        }catch(e){ const el=document.getElementById(bubbleId); if(el) el.textContent='Error: '+e.message; }
+      }
+
+  function updateRefs(meta){
+        if(!meta) return;
+        const refs = meta.sources || [];
+        const refsList = document.getElementById('refs-list'); refsList.innerHTML='';
+        document.getElementById('refs-empty').style.display = refs.length? 'none':'block';
+        refs.forEach(s=>{ const d=document.createElement('div'); d.className='ref-item'; d.innerHTML=`<span class='badge'>[${s.index}]</span> <strong>${(s.paper||'').slice(0,140).replace(/</g,'&lt;')}</strong><br><span class='small'>${s.arxiv_id} · ${s.kind} · unit ${s.page}</span>`; refsList.appendChild(d); });
+      }
     </script>
   </body>
 </html>

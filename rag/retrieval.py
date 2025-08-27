@@ -4,6 +4,8 @@ from .ingest import get_embedder, INDEX_PATH, DIM
 
 def search(q, k=5, multimodal=True):
     embed = get_embedder()
+    if not os.path.exists(INDEX_PATH):
+        return []
     qv = embed([q]).astype("float32")
     # Normalize query vector to match normalized index vectors (cosine similarity via inner product)
     q_norm = np.linalg.norm(qv, axis=1, keepdims=True)
@@ -48,6 +50,8 @@ def answer1(q, k=5):
 def answer(q, k=5):
     print("answer called with:", q, k)
     original_ctxs = search(q, k)
+    if not original_ctxs:
+        print("[RAG] No contexts retrieved for query (k=%s)." % k)
     # --- Redundancy suppression: collapse near-identical chunks (exact hash match) ---
     import hashlib
     seen_hash = {}
@@ -86,18 +90,16 @@ def answer(q, k=5):
         if not txt:
             continue
         if is_numeric_heavy(txt):
-            # attempt to salvage first non-numeric sentence
             parts = [p.strip() for p in txt.split('.') if p.strip()]
             for p in parts:
                 if not is_numeric_heavy(p):
                     txt = p
                     break
             else:
-                continue  # give up if all numeric heavy
+                continue
         words = [w.strip('.,();:') for w in txt.lower().split()]
         overlap = len(q_words.intersection(words))
-    # use current (deduped) index
-    scored.append((overlap, old_i, c, txt))
+        scored.append((overlap, old_i, c, txt))
 
     # sort by score desc, then index
     scored.sort(key=lambda x: (-x[0], x[1]))
@@ -205,32 +207,43 @@ def answer(q, k=5):
     sources_lines = [f"[{s['index']}] {s['paper']} (arXiv:{s['arxiv_id']}) kind={s['kind']} unit={s['page']}" for s in sources]
     grounding_lines = snippet_list
     context_text = "Sources:\n" + "\n".join(sources_lines) + "\n\nSnippets:\n" + "\n".join(grounding_lines)
-    from openai import OpenAI
-    with open(os.path.expanduser("~/.openai_api_key_gpt5")) as f:
-        api_key = f.read().strip()
-    client = OpenAI(api_key=api_key)
-    msg = [
-        {"role":"system","content":"You are a scholarly assistant. Use the provided Sources metadata and Snippets (curated sentences) to answer accurately. Cite supporting source indices like [2] or [1,3]. Do NOT output large tables or full paragraphs; only synthesized prose. If a detail is not in snippets, state uncertainty. Keep answer focused; extra fluff discouraged."},
-        {"role":"user","content":f"Question: {q}\n\n{context_text}\n\nAnswer (cite sources with [index]):"}
-    ]
-    preferred_model = os.environ.get("OPENAI_CHAT_MODEL", "gpt-4o")
-    t0 = time.time()
     usage = {}
-    model_used = preferred_model
+    latency_s = 0.0
+    model_used = os.environ.get("OPENAI_CHAT_MODEL", "gpt-4o")
+    ans = ""
     try:
-        out = client.chat.completions.create(model=preferred_model, messages=msg, temperature=0.1, max_tokens=220)
+        key_path = os.path.expanduser("~/.openai_api_key_gpt5")
+        if not os.path.exists(key_path):
+            raise RuntimeError("missing_api_key")
+        from openai import OpenAI
+        with open(key_path) as f:
+            api_key = f.read().strip()
+        client = OpenAI(api_key=api_key)
+        msg = [
+            {"role":"system","content":"You are a scholarly assistant. Use the provided Sources metadata and Snippets to answer accurately. Cite sources like [2]."},
+            {"role":"user","content":f"Question: {q}\n\n{context_text}\n\nAnswer (cite sources with [index]):"}
+        ]
+        t0 = time.time()
+        try:
+            out = client.chat.completions.create(model=model_used, messages=msg, temperature=0.1, max_tokens=220)
+        except Exception:
+            model_used = "gpt-4o-mini"
+            out = client.chat.completions.create(model=model_used, messages=msg, temperature=0.1, max_tokens=220)
+        latency_s = time.time() - t0
+        ans = out.choices[0].message.content.strip()
+        if getattr(out, 'usage', None):
+            usage = {
+                'prompt_tokens': getattr(out.usage, 'prompt_tokens', None),
+                'completion_tokens': getattr(out.usage, 'completion_tokens', None),
+                'total_tokens': getattr(out.usage, 'total_tokens', None)
+            }
     except Exception:
-        model_used = "gpt-4o-mini"
-        out = client.chat.completions.create(model=model_used, messages=msg, temperature=0.1, max_tokens=220)
-    latency_s = time.time() - t0
-    ans = out.choices[0].message.content.strip()
-    # token usage if present
-    if getattr(out, 'usage', None):
-        usage = {
-            'prompt_tokens': getattr(out.usage, 'prompt_tokens', None),
-            'completion_tokens': getattr(out.usage, 'completion_tokens', None),
-            'total_tokens': getattr(out.usage, 'total_tokens', None)
-        }
+        model_used = "offline-fallback"
+        if ctxs:
+            joined = " ".join((c.content or "").split()[:80] for c in ctxs if c.kind=="text")
+            ans = (joined[:480] + "…") if len(joined) > 480 else joined
+        else:
+            ans = "No documents indexed yet. Ingest papers (search) then retry."
     # Light length guard (optional): cap at ~160 words
     words = ans.split()
     if len(words) > 160:
@@ -256,4 +269,16 @@ def answer(q, k=5):
         'context_token_counts': context_token_counts,
         'dedup': {'original': len(original_ctxs), 'after_dedup': len(ctxs)}
     }
+    # Final guard: never return empty answer string
+    if not ans.strip():
+        if snippet_list:
+            ans = snippet_list[0]
+        elif ctxs:
+            txt = (ctxs[0].content or '').strip()
+            ans = txt[:200] + ('…' if len(txt) > 200 else '')
+        else:
+            ans = "No answer generated. Try ingesting papers then asking again."
+    # Secondary guard: if still empty (e.g., only image chunks with empty content), provide informative fallback
+    if not ans.strip():
+        ans = "No textual answer available from current (image-only) context. Ingest more text-rich papers or refine your question."
     return {'answer': ans, 'meta': meta}, truncated_ctxs

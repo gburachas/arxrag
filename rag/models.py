@@ -20,3 +20,13 @@ class QueryLog(models.Model):
     query = models.TextField()
     topk = models.IntegerField(default=5)
     created_at = models.DateTimeField(auto_now_add=True)
+
+class Reference(models.Model):
+    doc = models.ForeignKey(Document, on_delete=models.CASCADE)
+    raw_text = models.TextField()
+    arxiv_id = models.CharField(max_length=32, blank=True, db_index=True)
+    title = models.TextField(blank=True)
+    authors = models.TextField(blank=True)
+    position = models.IntegerField(default=0)
+    vector = models.BinaryField(blank=True, null=True)  # optional embedding
+    added_at = models.DateTimeField(auto_now_add=True)

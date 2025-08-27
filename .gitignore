@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+**/*.pyc
 
 # Virtualenv / Conda
 .env
@@ -20,7 +21,7 @@ staticfiles/
 .db.sqlite3-journal
 
 # SQLite DB
-/db.sqlite3
+**/db.sqlite3
 
 # Migrations cache (keep migration files themselves)
 */migrations/__pycache__/
